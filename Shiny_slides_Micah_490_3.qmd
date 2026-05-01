@@ -1,0 +1,394 @@
+---
+title: "Are Offenses Making a Strategic Mistake by Not Utilizing a Fullback?"
+subtitle: "An Analytics-Based Evaluation of the Fullback Position in the Modern NFL"
+format:
+  revealjs:
+    slide-number: true
+    theme: simple
+chalkboard:
+  buttons: false
+preview-links: auto
+css: styles.css
+footer: "Final Project - SMGT 490 - Micah Barnett - Rice University"
+---
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| results: hide
+library(tidyverse)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(lme4)
+library(gt)
+library(ggplot2)
+library(nflreadr)
+
+source("Plus_minus_model.R")
+```
+
+# Introduction {background="#6B6B6B"}
+
+## The Question
+- The fullback is a dying position in the NFL
+- Usage has declined significantly over the past decade
+- But is this decline analytically justified?
+- **Research Question:** Are offenses making a strategic mistake by not utilizing a fullback?
+
+## Why It Matters
+- Offensive coordinators make personnel decisions every game
+- If fullbacks provide measurable value, teams leaving them off rosters are losing wins
+- Analytics can help answer this question of should offenses use fullbacks
+
+# Data {background="#6B6B6B"}
+
+## Data Sources
+- **Play-by-Play Data** from `nflreadr` — 2020 to 2024 seasons
+- **Participation Data** from `nflreadr` — player-level personnel tracking
+- Position id`offense_positions` column (available 2023-2024 only)
+- Fullback id using `"1 FB"` in `offense_personnel` string
+
+## Key Variables
+- `has_fullback` — whether a fullback was in the personnel grouping
+- `situation_type` — goal line, short yardage, or base down
+- Outcome variables: `short_yardage_success`, `goal_line_success`, `epa`
+- Controls: down, yards to go, yard line, defenders in box, WPA, drive metrics
+
+## Situation Definitions
+- **Goal Line** — yardline ≤ 5
+- **Short Yardage** — 3rd or 4th down with ≤ 2 yards to go
+- **Base Down** — 1st and 10, or 2nd and 5-10
+
+# Methods {background="#6B6B6B"}
+
+## Analytical Approach
+Three-stage analysis:
+- **Plus/Minus** — raw comparison of outcomes with and without fullback
+- **Base Models** — logistic and linear regression controlling for situational factors
+- **Random Effects Models** — mixed models accounting for individual fullback identity
+
+## Base Models
+- Short Yardage & Goal Line → logistic regression (`glm`, binomial)
+- Base Down → linear regression (`lm`)
+- Controls selected using Pearson correlation feature selection
+- Ran on full dataset (all NFL teams, 2020-2024)
+
+## Random Effects Models
+- Mixed effects models (`glmer`/`lmer`) using `lme4`
+- Random intercept and slope for `has_fullback` by `fullback_id`
+- Limited to 2023-2024 (only seasons with position-level data)
+- 15 identified primary fullbacks across teams and seasons
+
+# Results {background="#6B6B6B"}
+
+## Plus/Minus Summary
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+plus_minus_results %>%
+  mutate(across(where(is.numeric), ~ round(., 3))) %>%
+  gt()
+```
+
+## Short Yardage Results
+- Fullback presence is **significant** across all short yardage models
+- All plays: p = 0.009, Rush: p = 0.046, Pass: p = 0.047
+- Having a fullback increases probability of gaining 1+ yard
+
+## Short Yardage - All Plays
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+get_fixed_gt_base(model_short_all, "Short Yardage - All Plays")
+```
+
+## Short Yardage - Rush Plays
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+get_fixed_gt_base(model_short_rush, "Short Yardage - Rush Plays")
+```
+
+## Short Yardage - Pass Plays
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+get_fixed_gt_base(model_short_pass, "Short Yardage - Pass Plays")
+```
+
+## Goal Line Results
+- Mixed results — not significant in base models
+- Random effects model shows significance on all plays (p = 0.048) and pass plays (p = 0.015)
+- Individual fullback identity matters more at the goal line than in other situations
+
+## Goal Line - All Plays
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+get_fixed_gt(re_model_goal_all,  "Goal Line - All Plays")
+```
+
+## Goal Line - Pass Plays
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+get_fixed_gt(re_model_goal_pass, "Goal Line - Pass Plays")
+```
+
+## Base Down Results
+- Fullback presence not significant in most base down models
+- Fullbacks add little to no value on standard downs
+
+## Random Effects Key Finding
+- Most singular fits — individual fullback identity does not drive outcomes
+- The only situation that shows true variation between fullbacks is goal line rush plays
+- The **position** matters more than the **player** in most situations
+
+## Random Effects Findings Model
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+get_ranef_gt(re_model_goal_rush, "Goal Line - Rush Plays")
+```
+
+# Plots {background="#6B6B6B"}
+
+## Success Rate by Situation
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+success_data <- situation_data %>%
+  mutate(
+    fullback_present = ifelse(has_fullback == 1, "Fullback Present", "No Fullback"),
+    success = case_when(
+      situation_type == "short_yardage" ~ short_yardage_success,
+      situation_type == "goal_line"     ~ goal_line_success,
+      situation_type == "base_down"     ~ as.numeric(epa > 0),
+      TRUE ~ NA_real_
+    ),
+    situation_label = case_when(
+      situation_type == "short_yardage" ~ "Short Yardage",
+      situation_type == "goal_line"     ~ "Goal Line",
+      situation_type == "base_down"     ~ "Base Down",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(success)) %>%
+  group_by(situation_label, fullback_present) %>%
+  summarise(
+    success_rate = mean(success, na.rm = TRUE),
+    n = n(),
+    se = sqrt(success_rate * (1 - success_rate) / n),
+    lower = success_rate - 1.96 * se,
+    upper = success_rate + 1.96 * se,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    situation_label = factor(situation_label, 
+                             levels = c("Short Yardage", "Goal Line", "Base Down"))
+  )
+
+ggplot(success_data, aes(x = situation_label, y = success_rate, fill = fullback_present)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  geom_text(aes(label = paste0(round(success_rate * 100, 1), "%")),
+            position = position_dodge(width = 0.7),
+            vjust = -0.8, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c("Fullback Present" = "darkblue", "No Fullback" = "grey")) +
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
+  labs(
+    title = "Success Rate With vs Without Fullback by Situation",
+    x = NULL,
+    y = "Success Rate",
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank()
+  )
+
+```
+## Effect of Fullback Presence — Base Models
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+extract_coef_glm <- function(model, model_name, situation, play_type) {
+  coefs <- summary(model)$coefficients
+  if (!"has_fullback" %in% rownames(coefs)) return(NULL)
+  data.frame(
+    model     = model_name,
+    situation = situation,
+    play_type = play_type,
+    estimate  = coefs["has_fullback", "Estimate"],
+    se        = coefs["has_fullback", "Std. Error"]
+  )
+}
+
+forest_data_base <- bind_rows(
+  extract_coef_glm(model_short_all,  "Short Yardage - All",  "Short Yardage", "All Plays"),
+  extract_coef_glm(model_short_rush, "Short Yardage - Rush", "Short Yardage", "Rush Plays"),
+  extract_coef_glm(model_short_pass, "Short Yardage - Pass", "Short Yardage", "Pass Plays"),
+  extract_coef_glm(model_goal_all,   "Goal Line - All",      "Goal Line",     "All Plays"),
+  extract_coef_glm(model_goal_rush,  "Goal Line - Rush",     "Goal Line",     "Rush Plays"),
+  extract_coef_glm(model_goal_pass,  "Goal Line - Pass",     "Goal Line",     "Pass Plays"),
+  extract_coef_glm(model_base_all,   "Base Down - All",      "Base Down",     "All Plays"),
+  extract_coef_glm(model_base_rush,  "Base Down - Rush",     "Base Down",     "Rush Plays"),
+  extract_coef_glm(model_base_pass,  "Base Down - Pass",     "Base Down",     "Pass Plays")
+) %>%
+  mutate(
+    lower = estimate - 1.96 * se,
+    upper = estimate + 1.96 * se,
+    significant = ifelse(lower > 0 | upper < 0, "Significant", "Not Significant"),
+    model = factor(model, levels = rev(c(
+      "Short Yardage - All",  "Short Yardage - Rush", "Short Yardage - Pass",
+      "Goal Line - All",      "Goal Line - Rush",     "Goal Line - Pass",
+      "Base Down - All",      "Base Down - Rush",     "Base Down - Pass"
+    )))
+  )
+
+ggplot(forest_data_base, aes(x = estimate, y = model, color = significant)) +
+  geom_point(size = 4) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0.3, linewidth = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  facet_grid(situation ~ ., scales = "free_y", space = "free_y") +
+  scale_color_manual(values = c("Significant" = "darkblue", "Not Significant" = "grey")) +
+  labs(
+    title    = "Effect of Fullback Presence Across Situations",
+    x        = "Coefficient Estimate ",
+    y        = NULL,
+    color    = NULL
+  ) +
+  theme_minimal() 
+
+
+```
+## Effect of Fullback Presence — Random Effects Models
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+library(tidyverse)
+library(ggplot2)
+
+# extract fixed effects from all models
+extract_fixed <- function(model, model_name) {
+  summary(model)$coefficients %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column("Predictor") %>%
+    mutate(model = model_name)
+}
+
+coef_data <- bind_rows(
+  extract_fixed(re_model_short_all,  "Short Yardage - All"),
+  extract_fixed(re_model_short_rush, "Short Yardage - Rush"),
+  extract_fixed(re_model_short_pass, "Short Yardage - Pass"),
+  extract_fixed(re_model_goal_all,   "Goal Line - All"),
+  extract_fixed(re_model_goal_rush,  "Goal Line - Rush"),
+  extract_fixed(re_model_goal_pass,  "Goal Line - Pass"),
+  extract_fixed(re_model_base_all,   "Base Down - All"),
+  extract_fixed(re_model_base_rush,  "Base Down - Rush"),
+  extract_fixed(re_model_base_pass,  "Base Down - Pass")
+) %>%
+  filter(Predictor == "has_fullback") %>%
+  rename(estimate = Estimate, se = `Std. Error`) %>%
+  mutate(
+    lower = estimate - 1.96 * se,
+    upper = estimate + 1.96 * se,
+    significant = ifelse(lower > 0 | upper < 0, "Significant", "Not Significant"),
+    model = factor(model, levels = c(
+      "Short Yardage - All", "Short Yardage - Rush", "Short Yardage - Pass",
+      "Goal Line - All", "Goal Line - Rush", "Goal Line - Pass",
+      "Base Down - All", "Base Down - Rush", "Base Down - Pass"
+    ))
+  )
+
+ggplot(coef_data, aes(x = estimate, y = model, color = significant)) +
+  geom_point(size = 4) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0.3, linewidth = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  scale_color_manual(values = c("Significant" = "darkblue", "Not Significant" = "grey")) +
+  labs(
+    title = "Effect of Fullback Presence Across Situations",
+    x = "Coefficient Estimate",
+    y = NULL,
+    color = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+## Individual Fullback Differences
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+ranef_data <- ranef(re_model_goal_all)$fullback_id %>%
+  tibble::rownames_to_column("fullback_id") %>%
+  left_join(fb_name_lookup, by = "fullback_id") %>%
+  rename(intercept = `(Intercept)`) %>%
+  mutate(
+    player_name = reorder(player_name, intercept),
+    direction = ifelse(intercept > 0, "Above Average", "Below Average")
+  )
+
+ggplot(ranef_data, aes(x = intercept, y = player_name, color = direction)) +
+  geom_point(size = 4) +
+  geom_segment(aes(x = 0, xend = intercept, y = player_name, yend = player_name),
+               linewidth = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  scale_color_manual(values = c("Above Average" = "darkblue", "Below Average" = "grey")) +
+  labs(
+    title = "Fullback Random Effects - Goal Line (All Plays)",
+    subtitle = "Deviation from average goal line success rate",
+    x = "Random Intercept",
+    y = NULL,
+    color = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+# Conclusion {background="#6B6B6B"}
+
+## Key Takeaways
+- Fullbacks provide **measurable value** in short yardage situations
+- It is valuable to have a fullback on roster
+- Individual fullback identity matters most at the **goal line**
+- Base down value is limited
+
+## Limitations
+- Position-level data only available for 2023-2024
+- Only 15 identified fullbacks; limits random effects precision
+- Cannot capture blocking value or play-action threat contributions
+
+## Future Work
+- Expand to more seasons as position data becomes available
+- Incorporate tracking data to measure blocking contributions
+- Compare fullback value against tight end in same formations
+
+# Thank You {background="#6B6B6B"}
+**Micah Barnett — Rice University — SMGT 490**
+
+
