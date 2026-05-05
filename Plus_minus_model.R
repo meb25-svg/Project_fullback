@@ -1,3 +1,9 @@
+#install.packages("glmnet")  
+#install.packages("gt")
+library(nflreadr)
+library(tidyverse)
+
+library(gt)
 Fullback_data<-read.csv("fullback_analysis_data.csv")
 head(Fullback_data)
 library(glmnet)
